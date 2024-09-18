@@ -79,7 +79,7 @@ class KittyService : Service() {
                     actualPrice = data.price!!.toDouble()
                     gap = actualPrice - entryPrice
 
-                    if (gap >= 25) {
+                    if (Math.abs(gap) >= 25) {
                         entryPrice += gap
                     }
                     if (Math.abs(gap) > factorRisk) {
