@@ -89,13 +89,20 @@
             android:layout_weight="1"/>
     </LinearLayout>
 
+    <EditText
+        android:layout_margin="20dp"
+        android:id="@+id/riskFactorInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Please enter risk factor"/>
+
     <Button
         android:layout_marginTop="20dp"
         android:layout_marginHorizontal="20dp"
         android:id="@+id/notifyButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@color/teal_700"
+        android:background="@drawable/notify_button"
         android:textColor="#ffffff"
         android:text="Turn on Notify"/>
 

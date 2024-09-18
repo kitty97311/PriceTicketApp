@@ -5,15 +5,21 @@ import android.app.AlertDialog
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
+import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -31,40 +37,31 @@ import java.text.DecimalFormat
 import java.util.Timer
 import java.util.TimerTask
 
-
 class MainActivity : ComponentActivity(), View.OnClickListener {
 
     lateinit var symbolText: TextView
     lateinit var entryText: TextView
     lateinit var gapText: TextView
     lateinit var riskText: TextView
+    lateinit var riskFactorInput: EditText
+    lateinit var notifyButton: Button
 
     var actualPrice: Double = 0.0
     var entryPrice: Double = 0.0
     var factorRisk: Double = 0.0
     var gap: Double = 0.0
-
-    private lateinit var requestPermissionsLauncher: ActivityResultLauncher<Array<String>>
+    var isInitial = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        requestPermissions()
-//        requestPermissionsLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-//            permissions.entries.forEach { entry ->
-//                val permissionName = entry.key
-//                val isGranted = entry.value
-//                if (isGranted) {
-//                    Toast.makeText(this, "$permissionName granted", Toast.LENGTH_SHORT).show()
-//                } else {
-//                    Toast.makeText(this, "$permissionName denied", Toast.LENGTH_SHORT).show()
-//                }
-//            }
-//        }
-
-
-
+        if (arePermissionsGranted()) {
+            // All required permissions are granted, proceed with functionality
+        } else {
+            // Request multiple permissions
+            requestPermissions()
+        }
 
         val channelId = "price_alerts_channel"
         val channelName: CharSequence = "Price Alerts"
@@ -79,15 +76,19 @@ class MainActivity : ComponentActivity(), View.OnClickListener {
         )
         notificationManager.createNotificationChannel(channel)
 
-
-
         symbolText = findViewById(R.id.symbolText)
         entryText = findViewById(R.id.entryText)
         gapText = findViewById(R.id.gapText)
         riskText = findViewById(R.id.riskText)
+        riskFactorInput = findViewById(R.id.riskFactorInput)
+        factorRisk = getRiskFactor()
+        riskFactorInput.setText(factorRisk.toString())
+        notifyButton = findViewById(R.id.notifyButton)
+        notifyButton.setOnClickListener(this)
+        notifyButton.isActivated = getRiskFactorOn()
+        notifyButton.text = if (notifyButton.isActivated) "Turn off Notify" else "Turn on Notify"
 
-        showInputDialog()
-
+        display()
     }
 
     private fun showInputDialog() {
@@ -103,7 +104,7 @@ class MainActivity : ComponentActivity(), View.OnClickListener {
                 if (editText.text == null) Toast.makeText(this@MainActivity, "Input risk factor", Toast.LENGTH_SHORT).show()
                 else {
                     factorRisk = editText.text.toString().toDouble()
-                    setRiskFactor()
+                    setRiskFactor(true)
                     dialogInterface.dismiss()
                     display()
                 }
@@ -117,25 +118,33 @@ class MainActivity : ComponentActivity(), View.OnClickListener {
         dialog.show()
     }
 
-    private fun setRiskFactor() {
+    private fun setRiskFactor(on_off: Boolean) {
         val sharedPreferences = getSharedPreferences("kitty_pref", Context.MODE_PRIVATE)
         val editor = sharedPreferences.edit()
         editor.putFloat("risk_factor", factorRisk.toFloat())
+        editor.putBoolean("risk_factor_on", on_off)
         editor.apply()
     }
 
-    private fun getRiskFactor(): Float {
+    private fun getRiskFactor(): Double {
         val sharedPreferences = getSharedPreferences("kitty_pref", Context.MODE_PRIVATE)
-        return sharedPreferences.getFloat("risk_factor", 0.0f)
+        return sharedPreferences.getFloat("risk_factor", 5.0f).toDouble()
     }
 
+    private fun getRiskFactorOn(): Boolean {
+        val sharedPreferences = getSharedPreferences("kitty_pref", Context.MODE_PRIVATE)
+        return sharedPreferences.getBoolean("risk_factor_on", false)
+    }
+
+    private lateinit var thread: Thread
+
     private fun display() {
-        getPriceSymbol(0)
+        riskText.text = factorRisk.toString()
         // Crear un hilo para actualizar la información en tiempo real
-        Thread {
+        thread = Thread {
             while (true) {
 
-                getPriceSymbol(1)
+                getPriceSymbol()
 
                 try {
                     Thread.sleep(500) // Esperar 0 segundo antes de la siguiente actualización
@@ -143,8 +152,9 @@ class MainActivity : ComponentActivity(), View.OnClickListener {
                     e.printStackTrace()
                 }
             }
-        }.start()
-        repeatInstructions(this)
+        }
+        thread.start()
+//        repeatInstructions(this)
     }
 
     fun repeatInstructions(context: Context) {
@@ -152,18 +162,20 @@ class MainActivity : ComponentActivity(), View.OnClickListener {
         val task: TimerTask = object : TimerTask() {
             override fun run() {
                 try {
-                    getPriceSymbol(2)
+                    getPriceSymbol()
                     gap = actualPrice - entryPrice
 
                     if (gap >= 25) {
                         entryPrice += gap
                     }
-
-                    if (actualPrice <= (entryPrice - factorRisk)) {
-                        sendNotification(context, "Buy Alert", "buy buy buy...")
-                    } else if (actualPrice >= (entryPrice + factorRisk)) {
-                        sendNotification(context, "Sell Alert", "Up sell sell sell...")
+                    if (Math.abs(gap) > factorRisk) {
+                        if (gap > 0) {
+                            sendNotification(context, "Sell Alert", "sell sell sell...")
+                        } else {
+                            sendNotification(context, "Buy Alert", "buy buy buy...")
+                        }
                     }
+
                 } catch (e: Exception) {
                     Log.e("NotificationError", "Error occurred: ${e.message}")
                 }
@@ -172,7 +184,7 @@ class MainActivity : ComponentActivity(), View.OnClickListener {
         timer.schedule(task, 0, 1000)
     }
 
-    fun getPriceSymbol(mode: Int) {
+    fun getPriceSymbol() {
         CoroutineScope(Dispatchers.IO).launch {
             val urlString = "https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT"
             var data: Symbol? = null
@@ -189,73 +201,135 @@ class MainActivity : ComponentActivity(), View.OnClickListener {
                 e.printStackTrace() // Log the exception
             }
 
+            if (isInitial) {
+                entryPrice = data?.price!!.toDouble()
+                isInitial = false
+            }
+            actualPrice = data?.price!!.toDouble()
+            gap = actualPrice - entryPrice
+
+            if (gap >= 25) {
+                entryPrice += gap
+            }
+
             // Switch to the Main thread to update the UI
             withContext(Dispatchers.Main) {
-                if (mode == 0)
-                    entryPrice = data?.price!!.toDouble()
-                else if (mode ==1) {
-                    symbolText.text = data?.price
-
-                    entryText.text = entryPrice.toString()
-                    gapText.text = DecimalFormat("#.###").format(gap)
-                    riskText.text = factorRisk.toString()
-                }
-                else if (mode == 2)
-                    actualPrice = data?.price!!.toDouble()
-
+                symbolText.text = data?.price
+                entryText.text = entryPrice.toString()
+                gapText.text = DecimalFormat("#.###").format(gap)
             }
         }
     }
 
     private fun sendNotification(context: Context, title: String, message: String) {
+        // Get the custom sound URI
+        val soundUri = Uri.parse("android.resource://" + packageName + "/" + R.raw.btc_alarm)
+
+        // Create notification channel for Android 8+ (Oreo and above)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val audioAttributes = AudioAttributes.Builder()
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                .build()
+
+            val channel = NotificationChannel(
+                "price_alerts_channel",  // Channel ID
+                "Price Alerts",          // Channel Name
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                setSound(soundUri, audioAttributes) // Set custom sound for the channel
+            }
+
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        // Create the notification with custom sound
         val builder: NotificationCompat.Builder =
             NotificationCompat.Builder(this, "price_alerts_channel")
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .setContentTitle(title)
                 .setContentText(message)
+                .setSound(soundUri) // Set custom sound here
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
 
         val notificationManager = NotificationManagerCompat.from(this)
+
+        // Check for notification permission (Android 13+)
         if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.POST_NOTIFICATIONS
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            // TODO: Consider calling
-            //    ActivityCompat#requestPermissions
-            // here to request the missing permissions, and then overriding
-            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-            //                                          int[] grantResults)
-            // to handle the case where the user grants the permission. See the documentation
-            // for ActivityCompat#requestPermissions for more details.
-            Log.e("Permission is not granted", "Failed")
+            // If permission is not granted, log the error
+            Log.e("Permission is not granted", "Failed to send notification")
             return
         }
-        notificationManager.notify(1, builder.build())
 
+        // Display the notification
+        notificationManager.notify(1, builder.build())
     }
 
     override fun onClick(p0: View?) {
         if (p0 == null) return
         if (p0.id == R.id.notifyButton) {
+            if (riskFactorInput.text == null) Toast.makeText(this@MainActivity, "Input risk factor", Toast.LENGTH_SHORT).show()
+            else toggleNotify()
+        }
+    }
 
+    private fun toggleNotify() {
+        factorRisk = riskFactorInput.text.toString().toDouble()
+        if (notifyButton.isActivated) {
+            Toast.makeText(this, "Notification is turned off!", Toast.LENGTH_SHORT).show()
+            notifyButton.text = "Turn on Notify"
+            notifyButton.isActivated = false
+            stopService(Intent(this, KittyService::class.java))
+        } else {
+            Toast.makeText(this, "Notification is turned on!", Toast.LENGTH_SHORT).show()
+            notifyButton.text = "Turn off Notify"
+            notifyButton.isActivated = true
+            startForegroundService(Intent(this, KittyService::class.java)) // Use startService() for Android < 8.0
+        }
+        setRiskFactor(notifyButton.isActivated)
+        thread.interrupt()
+        display()
+    }
+
+    private fun arePermissionsGranted(): Boolean {
+        return listOf(
+            Manifest.permission.POST_NOTIFICATIONS,
+            Manifest.permission.VIBRATE,
+            // Add more permissions as needed
+        ).all { permission ->
+            ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
         }
     }
 
     private fun requestPermissions() {
-        // Check for permissions
-        val permissionsToRequest = mutableListOf<String>()
-
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+        val requestPermissionsLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { permissions ->
+            // Handle the result for each permission
+            permissions.entries.forEach { entry ->
+                val permissionName = entry.key
+                val isGranted = entry.value
+                if (isGranted) {
+                    // Permission granted, handle accordingly
+                } else {
+                    // Permission denied, handle accordingly
+                }
+            }
         }
 
-        // Request permissions if needed
-        if (permissionsToRequest.isNotEmpty()) {
-            requestPermissionsLauncher.launch(permissionsToRequest.toTypedArray())
-        } else {
-            Toast.makeText(this, "All permissions already granted", Toast.LENGTH_SHORT).show()
+        // Only request permissions on Android 13+ that require runtime permission
+        val permissionsToRequest = mutableListOf<String>().apply {
+            add(Manifest.permission.POST_NOTIFICATIONS)
+            add(Manifest.permission.VIBRATE)
+            // Add more permissions as needed
         }
+
+        requestPermissionsLauncher.launch(permissionsToRequest.toTypedArray())
     }
 
     class Symbol {
